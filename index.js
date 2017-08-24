@@ -25,7 +25,7 @@ const mergePreviousBranch = async (currentBranch, nextBranch) => {
   await exec(`git checkout ${nextBranch}`);
   await exec(`git merge ${currentBranch}`); // Merge conflict should just throw
   await exec(`git push`);
-
+  console.log(`Merged & pushed ${nextBranch}`);
   return true;
 };
 
