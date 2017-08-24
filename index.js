@@ -1,60 +1,61 @@
-// node ./.scripts/update-branches.js
-const exec = require('child_process').exec;
+#!/usr/bin/env node
+const program = require('commander');
+const fs = require('fs');
+const Promise = require('bluebird');
+const _ = require('lodash');
+const child_process = require('child_process');
 
-/*
- * 1. Path to the list of branches (capture from process.argv)
- * 2. Get current branch (git rev-parse --abbrev-ref HEAD)
- * 3. Branch to stop at (default at next branch index, capture from process.argv)
- * 4. Merge, commit, push, repeat for next branch until at final branch from step 3
- *    - If merge fail, throw & stop
- */
+const readFile = Promise.promisify(fs.readFile);
+const exec = Promise.promisify(child_process.exec);
 
-const getCurrentBranch = () => {
-  return new Promise((resolve, reject) => {
-    exec('git rev-parse --abbrev-ref HEAD', (error, stdout, stderr) => {
-      if (error !== null) {
-        reject(error);
-      } else {
-        resolve(stdout.replace(/ /g, ''));
-      }
-    });
-  });
+const getArrayOfBranches = async (path) => {
+  const data = await readFile(path, { encoding: 'utf8' });
+  return _.without(data.split('\n'), '');
 };
 
-const checkoutBranch = branch => {
-  return new Promise((resolve, reject) => {
-    exec(`git checkout ${branch}`, (error, stdout, stderr) => {
-      if (error !== null) {
-        reject(error);
-      } else {
-        resolve(stdout.replace(/ /g, ''));
-      }
-    });
-  });
+const getCurrentBranch = async () => {
+  const branch = await exec('git rev-parse --abbrev-ref HEAD');
+  return _.trim(branch);
 };
 
-const doTheThing = async () => {
+const indexOfBranch = (branches, branch) => _.indexOf(branches, branch);
+
+const mergePreviousBranch = async (currentBranch, nextBranch) => {
+  await exec(`git checkout ${currentBranch}`);
+  await exec(`git checkout ${nextBranch}`);
+  await exec(`git merge ${currentBranch}`); // Merge conflict should just throw
+  await exec(`git push`);
+
+  return true;
+};
+
+const doTheThings = async (pathToBranches, options) => {
   try {
-    const currentBranch = await getCurrentBranch(); // is there a bunch of whitespace around this?
-    const pathToBranchesArray = process.argv[2];
-    const branchToStopMergingAt = process.argv[3];
+    const branches = await getArrayOfBranches(pathToBranches);
 
-    if (!currentBranch || !pathToBranchesArray || !branchToStopMergingAt) {
-      throw new Error('pass the params, fam');
+    const startBranch = options.startBranch ? options.startBranch : await getCurrentBranch();
+    const indexOfStartBranch = indexOfBranch(branches, startBranch);
+    if (indexOfStartBranch === -1) throw new Error('Specified start branch is not valid');
+
+    const finishBranch = options.finishBranch ? options.finishBranch : branches[indexOfStartBranch + 1];
+    const indexOfFinishBranch = indexOfBranch(branches, finishBranch);
+    if (indexOfFinishBranch === -1) throw new Error('Specified finish branch is not valid');
+
+    let i = indexOfStartBranch;
+    while (i < indexOfFinishBranch) {
+      await mergePreviousBranch(branches[i], branches[i + 1]);
+      i++;
     }
-
-    // TODO: Check that we can load an array in from pathToBranchesArray
-    // TODO: Check that the current branch is in the branchesArray
-    // TODO: Check that branchToStopMergingAt is a branch & the index is greater than the current
-
-    // TODO: Checkout next branch
-    // TODO: merge previous branch
-    // TODO: Push branch
-    // TODO: Repeat until at the "branchToStopMergingAt" OR and error is thrown (like merge conflict)
-    // TODO: Track some stats & log it
   } catch (e) {
-    console.warn('ahhh shiiit', e);
+    console.log('Something went wrong...', e);
   }
 };
 
-doTheThing();
+program
+  .arguments('<pathToBranches>')
+  .option('-s, --start <startBranch>', 'The branch to start at')
+  .option('-f, --finish <finishBranch>', 'The branch to finish at')
+  .action((pathToBranches) => {
+    doTheThings(pathToBranches, { startBranch: program.start, finishBranch: program.finish });
+  })
+  .parse(process.argv);
